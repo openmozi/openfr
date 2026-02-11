@@ -9,11 +9,42 @@ from langchain_core.tools import tool
 from openfr.tools.base import format_dataframe, retry_on_network_error
 
 
+# 新浪 futures_zh_spot 因数据源列数变化会触发 Length mismatch，用此列表按品种回退拉取
+_FUTURES_SPOT_FALLBACK_VARS = [
+    "螺纹钢", "沪铜", "原油", "豆粕", "铁矿石", "甲醇", "PTA", "沪金", "沪银",
+    "玉米", "棕榈油", "橡胶", "白糖", "棉花", "焦炭", "焦煤", "沥青", "热轧卷板",
+    "玻璃", "纯碱", "沪铝", "沪锌", "沪镍", "豆油", "菜粕", "尿素", "生猪",
+]
+
 # 为 AKShare 调用添加重试装饰器（期货接口易断开，加重试与静默）
 @retry_on_network_error(max_retries=3, base_delay=1.2, silent=True)
 def _fetch_futures_spot() -> pd.DataFrame:
-    """获取期货实时行情（带重试）"""
-    return ak.futures_zh_spot()
+    """获取期货实时行情（带重试）。若新浪全量接口列数异常则按品种回退拉取。"""
+    try:
+        return ak.futures_zh_spot()
+    except ValueError as e:
+        if "Length mismatch" in str(e) or "Expected axis" in str(e):
+            return _fetch_futures_spot_fallback()
+        raise
+
+
+def _fetch_futures_spot_fallback() -> pd.DataFrame:
+    """当 futures_zh_spot 因新浪接口列数变化失败时，按品种调用 futures_zh_realtime 聚合。"""
+    frames = []
+    for var in _FUTURES_SPOT_FALLBACK_VARS:
+        try:
+            df = ak.futures_zh_realtime(symbol=var)
+            if df is not None and not df.empty:
+                frames.append(df)
+        except Exception:
+            continue
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    # 统一列名便于与原接口一致：保留 symbol, name，用 trade 作为 current_price
+    if "trade" in out.columns and "current_price" not in out.columns:
+        out = out.rename(columns={"trade": "current_price"})
+    return out
 
 
 @retry_on_network_error(max_retries=3, base_delay=1.0, silent=True)

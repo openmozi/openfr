@@ -77,6 +77,19 @@ class TestToolIntegration:
             assert isinstance(result, str)
             assert len(result) > 0
 
+    @pytest.mark.integration
+    def test_futures_realtime_returns_data(self):
+        """期货实时行情：新浪接口若列数异常则走 fallback，应返回有效行情字符串。"""
+        from openfr.tools.futures import get_futures_realtime, _fetch_futures_spot
+
+        df = _fetch_futures_spot()
+        assert not df.empty, "期货实时数据不应为空"
+        assert "symbol" in df.columns and "name" in df.columns, "应包含 symbol/name 列"
+        result = get_futures_realtime.invoke({})
+        assert isinstance(result, str)
+        assert "期货" in result
+        assert "行情" in result or "symbol" in result
+
 
 class TestAgentIntegration:
     """使用 .env 配置的真实 LLM 与真实工具，无 mock。"""
