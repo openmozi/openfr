@@ -1,12 +1,10 @@
-# OpenFR - 开源金融研究 Agent
-
 <div align="center">
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![AKShare](https://img.shields.io/badge/powered%20by-AKShare-orange.svg)](https://github.com/akfamily/akshare)
 
-**极简轻量的金融研究 Agent | 基于 AKShare | 支持多种 LLM | 自动数据获取与分析**
+**OpenFR极简轻量的金融研究 Agent | 基于 AKShare | 支持多种 LLM | 自动数据获取与分析**
 
 [快速开始](#快速开始) • [功能特性](#功能特性) • [使用指南](#使用指南) • [配置说明](#配置说明) • [架构设计](#架构设计)
 
