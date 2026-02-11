@@ -1,0 +1,41 @@
+### Python 编译产物
+__pycache__/
+*.py[cod]
+*$py.class
+
+### 虚拟环境
+.venv/
+env/
+venv/
+
+### 操作系统和编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+### 测试与覆盖率
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+### 缓存与临时文件
+.mypy_cache/
+.ruff_cache/
+.cache/
+*.log
+
+### 本地环境配置 / 密钥
+.env
+.env.*
+!*.env.example
+
+### 构建产物
+build/
+dist/
+*.egg-info/
+
+### Jupyter 等
+.ipynb_checkpoints/
+
