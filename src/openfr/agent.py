@@ -2,7 +2,7 @@
 Financial Research Agent implementation.
 """
 
-from typing import Iterator
+from typing import Any, Iterator
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -59,6 +59,7 @@ class FinancialResearchAgent:
             include_index=self.config.enable_index_tools,
             include_macro=self.config.enable_macro_tools,
         )
+        self.tools_map: dict[str, Any] = {tool.name: tool for tool in self.tools}
         self.llm_with_tools = self.llm.bind_tools(self.tools)
 
     def _create_llm(self) -> BaseChatModel:
@@ -103,13 +104,6 @@ class FinancialResearchAgent:
             kwargs["base_url"] = base_url
 
         return ChatOpenAI(**kwargs)
-
-    def _get_tool_by_name(self, name: str):
-        """Get a tool function by its name."""
-        for tool in self.tools:
-            if tool.name == name:
-                return tool
-        return None
 
     def _trim_chat_history(self, history: list[BaseMessage], max_messages: int = 20) -> None:
         """
@@ -194,7 +188,7 @@ class FinancialResearchAgent:
                         yield {"type": "tool_start", "tool": tc["name"], "args": tc.get("args", {}), "step": current_step_num, "step_goal": goal}
                     parallel_results = execute_tools_parallel(
                         tool_calls,
-                        get_tool_func=self._get_tool_by_name,
+                        get_tool_func=lambda name: self.tools_map.get(name),
                         max_workers=min(2 + len(tool_calls), 8),
                         timeout=45.0,
                     )
@@ -220,7 +214,7 @@ class FinancialResearchAgent:
                             yield {"type": "tool_warning", "tool": tool_name, "message": warning}
                             result = f"跳过: {warning}"
                         else:
-                            tool = self._get_tool_by_name(tool_name)
+                            tool = self.tools_map.get(tool_name)
                             if tool:
                                 try:
                                     result = tool.invoke(tool_args)

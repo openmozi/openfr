@@ -1,200 +1,3 @@
-from __future__ import annotations
-
-"""
-Command line interface for OpenFR.
-
-提供以下子命令：
-- openfr chat      进入多轮对话模式
-- openfr query     单次问答
-- openfr tools     查看可用金融数据工具
-- openfr providers 查看已支持的模型提供商
-"""
-
-import os
-from typing import List
-
-import typer
-from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Prompt
-from rich.table import Table
-
-from langchain_core.messages import BaseMessage
-
-from openfr.agent import FinancialResearchAgent
-from openfr.config import Config
-from openfr.tools import get_tool_descriptions
-
-
-app = typer.Typer(help="OpenFR - 开源金融研究 Agent 命令行工具")
-console = Console()
-
-
-def _build_agent() -> FinancialResearchAgent:
-    """构建 Agent 实例，并在失败时给出友好提示。"""
-    try:
-        return FinancialResearchAgent()
-    except Exception as exc:  # pragma: no cover - 仅用于 CLI 友好提示
-        console.print(f"[red]初始化 Agent 失败：{exc}[/red]")
-        raise typer.Exit(code=1)
-
-
-@app.command()
-def query(
-    question: str = typer.Argument(..., help="要提问的金融问题"),
-    verbose: bool = typer.Option(
-        True,
-        "--verbose/--quiet",
-        help="是否显示工具调用过程（默认开启）",
-    ),
-) -> None:
-    """单次问答模式：只回答这一问题并退出。"""
-    agent = _build_agent()
-
-    console.print(
-        Panel.fit(
-            f"[bold cyan]{question}[/bold cyan]",
-            title="问题",
-            border_style="cyan",
-        )
-    )
-
-    answer = agent.query(question, verbose=verbose)
-
-    console.print(
-        Panel(
-            answer,
-            title="回答",
-            border_style="green",
-        )
-    )
-
-
-@app.command()
-def chat(
-    provider: str = typer.Option(
-        None,
-        "-p",
-        "--provider",
-        help="覆盖环境变量 OPENFR_PROVIDER，指定模型提供商",
-    ),
-    model: str = typer.Option(
-        None,
-        "-m",
-        "--model",
-        help="覆盖环境变量 OPENFR_MODEL，指定模型名称",
-    ),
-) -> None:
-    """进入多轮对话模式。"""
-    if provider:
-        os.environ["OPENFR_PROVIDER"] = provider
-    if model:
-        os.environ["OPENFR_MODEL"] = model
-
-    agent = _build_agent()
-
-    console.print(
-        Panel(
-            "[bold cyan]OpenFR 多轮对话模式[/bold cyan]\n"
-            "[dim]输入 q / quit / exit 退出，对话内容会作为上下文参与后续推理。[/dim]",
-            title="OpenFR Chat",
-            border_style="cyan",
-        )
-    )
-
-    history: List[BaseMessage] = []
-
-    while True:
-        try:
-            question = Prompt.ask("[bold yellow]你[/bold yellow]")
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[bold]再见！[/bold]")
-            break
-
-        if question.strip().lower() in {"q", "quit", "exit"}:
-            console.print("[bold]已退出对话。[/bold]")
-            break
-
-        if not question.strip():
-            continue
-
-        console.print("[cyan]正在思考，请稍候...[/cyan]")
-
-        answer = ""
-        # run 会在内部更新 history（通过传入的 messages 列表）
-        for event in agent.run(question, messages=history):
-            etype = event.get("type")
-
-            if etype == "thinking":
-                # 为避免噪音，这里不打印每次思考事件
-                continue
-            if etype == "tool_start":
-                console.print(
-                    f"[dim]调用工具: {event.get('tool')}[/dim]"
-                )
-            elif etype == "tool_warning":
-                console.print(
-                    f"[yellow]{event.get('message')}[/yellow]"
-                )
-            elif etype == "tool_end":
-                # 保持输出简洁，只在 verbose 场景下由 agent.query 打印详细信息
-                continue
-            elif etype == "answer":
-                answer = event.get("content", "")
-
-        console.print(
-            Panel(
-                answer,
-                title="回答",
-                border_style="green",
-            )
-        )
-
-
-@app.command()
-def tools() -> None:
-    """列出所有可用的金融数据工具。"""
-    desc = get_tool_descriptions()
-    console.print(
-        Panel(
-            desc,
-            title="可用工具 (Tools)",
-            border_style="magenta",
-        )
-    )
-
-
-@app.command()
-def providers() -> None:
-    """列出所有支持的模型提供商及配置情况。"""
-    providers = Config.list_providers()
-
-    table = Table(title="模型提供商 (Providers)")
-    table.add_column("名称", style="cyan", no_wrap=True)
-    table.add_column("API Key 环境变量", style="magenta")
-    table.add_column("默认模型", style="green")
-    table.add_column("说明", style="white")
-    table.add_column("是否已配置", style="yellow")
-
-    for p in providers:
-        table.add_row(
-            p["name"],
-            p["env_key"],
-            p["default_model"] or "-",
-            p["description"],
-            "✅" if p["configured"] else "❌",
-        )
-
-    console.print(table)
-
-
-def main() -> None:  # pragma: no cover - Typer 入口
-    app()
-
-
-if __name__ == "__main__":  # pragma: no cover
-    main()
-
 """
 Command Line Interface for OpenFR.
 """
@@ -251,6 +54,91 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from openfr.tools import get_tool_descriptions
+
+
+def process_agent_events(
+    agent: FinancialResearchAgent,
+    question: str,
+    messages: list | None = None,
+    verbose: bool = True,
+    show_plan: bool = True,
+) -> str:
+    """处理 agent 事件并返回最终答案的公共函数"""
+    current_tool = None
+    current_step = None
+    current_step_goal = None
+    total_steps = None
+
+    with console.status("[bold green]🤔 正在思考...") as status:
+        for event in agent.run(question, messages=messages):
+            if event["type"] == "thinking":
+                iteration = event.get("iteration", 1)
+                phase = event.get("phase")
+                step_goal = event.get("step_goal")
+                if phase == "planning":
+                    status.update("[bold magenta]🧠 正在拆解任务...[/]")
+                elif step_goal is not None:
+                    step_num = event.get("step", iteration)
+                    if total_steps is not None and current_step != step_num:
+                        console.print(f"\n[bold cyan]第 {step_num}/{total_steps} 步[/] [dim]·[/] [cyan]{step_goal}[/]")
+                    current_step = step_num
+                    current_step_goal = step_goal
+                    status.update(f"[bold cyan]📌 第 {step_num}/{total_steps or '?'} 步: {step_goal[:30]}{'…' if len(step_goal) > 30 else ''}[/]")
+                else:
+                    current_step = None
+                    current_step_goal = None
+                    status.update(create_progress_text(iteration))
+
+            elif event["type"] == "plan":
+                steps = event.get("steps") or []
+                total_steps = event.get("n_steps") or (len(steps) if steps else None)
+                if steps and show_plan:
+                    plan_text = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(steps))
+                    console.print(Panel(
+                        plan_text,
+                        title="[bold magenta]📋 任务规划[/bold magenta]",
+                        border_style="magenta",
+                        box=box.ROUNDED,
+                    ))
+                    status.update("[bold green]✓ 规划完成，开始执行[/]")
+
+            elif event["type"] == "tool_start":
+                tool_name = event["tool"]
+                tool_desc = get_tool_display_name(tool_name)
+                current_tool = tool_name
+                step_num = event.get("step", current_step)
+                step_goal = event.get("step_goal", current_step_goal)
+                if step_num is not None and step_goal is not None:
+                    n = f"/{total_steps}" if total_steps is not None else ""
+                    status.update(f"[bold cyan]📌 第 {step_num}{n} 步: {step_goal[:25]}{'…' if len(step_goal) > 25 else ''} · {tool_desc}[/]")
+                else:
+                    status.update(create_progress_text(event.get("iteration", 1), tool_desc))
+
+                if verbose:
+                    console.print(f"\n[bold cyan]▶[/bold cyan] [bold]{tool_desc}[/bold]")
+
+            elif event["type"] == "tool_end":
+                if verbose:
+                    result = event["result"]
+                    tool_name = current_tool or "unknown"
+                    formatted_result = format_tool_result(tool_name, result)
+                    console.print(formatted_result)
+
+            elif event["type"] == "tool_warning":
+                console.print(Panel(
+                    f"⚠️  {event['message']}",
+                    border_style="yellow",
+                    title="[yellow]提示[/yellow]"
+                ))
+
+            elif event["type"] == "answer":
+                console.print()
+                final_panel = format_final_answer(event["content"])
+                console.print(final_panel)
+                return event["content"]
+
+    return ""
+
 
 app = typer.Typer(
     name="openfr",
@@ -426,80 +314,7 @@ def query(
         console.print(f"[yellow]警告: 未设置 {env_key} 环境变量[/]")
 
     agent = FinancialResearchAgent(config)
-
-    # 收集执行过程（维护当前步骤与总步数，按任务规划展示）
-    current_tool = None
-    current_step = None
-    current_step_goal = None
-    total_steps = None
-
-    with console.status("[bold green]🤔 正在思考...") as status:
-        for event in agent.run(question):
-            if event["type"] == "thinking":
-                iteration = event.get("iteration", 1)
-                phase = event.get("phase")
-                step_goal = event.get("step_goal")
-                if phase == "planning":
-                    status.update("[bold magenta]🧠 正在拆解任务...[/]")
-                elif step_goal is not None:
-                    step_num = event.get("step", iteration)
-                    # 仅在实际进入新步骤时打印标题，同一步骤内多轮思考不重复打印
-                    if total_steps is not None and current_step != step_num:
-                        console.print(f"\n[bold cyan]第 {step_num}/{total_steps} 步[/] [dim]·[/] [cyan]{step_goal}[/]")
-                    current_step = step_num
-                    current_step_goal = step_goal
-                    status.update(f"[bold cyan]📌 第 {step_num}/{total_steps or '?'} 步: {step_goal[:30]}{'…' if len(step_goal) > 30 else ''}[/]")
-                else:
-                    current_step = None
-                    current_step_goal = None
-                    status.update(create_progress_text(iteration))
-
-            elif event["type"] == "plan":
-                steps = event.get("steps") or []
-                total_steps = event.get("n_steps") or (len(steps) if steps else None)
-                if steps:
-                    plan_text = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(steps))
-                    console.print(Panel(
-                        plan_text,
-                        title="[bold magenta]📋 任务规划[/bold magenta]",
-                        border_style="magenta",
-                        box=box.ROUNDED,
-                    ))
-                    status.update("[bold green]✓ 规划完成，开始执行[/]")
-
-            elif event["type"] == "tool_start":
-                tool_name = event["tool"]
-                tool_desc = get_tool_display_name(tool_name)
-                current_tool = tool_name
-                step_num = event.get("step", current_step)
-                step_goal = event.get("step_goal", current_step_goal)
-                if step_num is not None and step_goal is not None:
-                    n = f"/{total_steps}" if total_steps is not None else ""
-                    status.update(f"[bold cyan]📌 第 {step_num}{n} 步: {step_goal[:25]}{'…' if len(step_goal) > 25 else ''} · {tool_desc}[/]")
-                else:
-                    status.update(create_progress_text(event.get("iteration", 1), tool_desc))
-
-                if verbose:
-                    console.print(f"\n[bold cyan]▶[/bold cyan] [bold]{tool_desc}[/bold]")
-
-            elif event["type"] == "tool_end":
-                if verbose:
-                    result = event["result"]
-                    tool_name = current_tool or "unknown"
-                    formatted_result = format_tool_result(tool_name, result)
-                    console.print(formatted_result)
-
-            elif event["type"] == "tool_warning":
-                console.print(Panel(
-                    f"⚠️  {event['message']}",
-                    border_style="yellow",
-                    title="[yellow]提示[/yellow]"
-                ))
-
-            elif event["type"] == "answer":
-                console.print()
-                final_panel = format_final_answer(event["content"])
-                console.print(final_panel)
+    process_agent_events(agent, question, verbose=verbose)
 
 
 @app.command()
@@ -567,7 +382,6 @@ def chat(
         try:
             console.print()
             try:
-                # 使用 prompt_toolkit 提供更好的输入体验（支持删除、历史记录等）
                 question = session.prompt("你: ")
             except (EOFError, KeyboardInterrupt):
                 break
@@ -580,91 +394,10 @@ def chat(
                 continue
 
             console.print()
-
-            # 显示执行过程（维护当前步骤与总步数，按任务规划展示）
-            current_tool = None
-            current_step = None
-            current_step_goal = None
-            total_steps = None
             start_time = time.time()
-            answered = False
-            with console.status("[bold cyan]🤔 正在思考...[/]") as status:
-                for event in agent.run(question, messages=chat_history):
-                    if event["type"] == "thinking":
-                        iteration = event.get("iteration", 1)
-                        phase = event.get("phase")
-                        step_goal = event.get("step_goal")
-                        if phase == "planning":
-                            status.update("[bold magenta]🧠 正在拆解任务...[/]")
-                        elif step_goal is not None:
-                            step_num = event.get("step", iteration)
-                            # 仅在实际进入新步骤时打印标题，同一步骤内多轮思考不重复打印
-                            if total_steps is not None and current_step != step_num:
-                                console.print(f"\n[bold cyan]第 {step_num}/{total_steps} 步[/] [dim]·[/] [cyan]{step_goal}[/]")
-                            current_step = step_num
-                            current_step_goal = step_goal
-                            status.update(f"[bold cyan]📌 第 {step_num}/{total_steps or '?'} 步: {step_goal[:30]}{'…' if len(step_goal) > 30 else ''}[/]")
-                        else:
-                            current_step = None
-                            current_step_goal = None
-                            progress_text = create_progress_text(iteration)
-                            status.update(progress_text)
-
-                    elif event["type"] == "plan":
-                        steps = event.get("steps") or []
-                        total_steps = event.get("n_steps") or (len(steps) if steps else None)
-                        if steps:
-                            plan_text = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(steps))
-                            console.print(Panel(
-                                plan_text,
-                                title="[bold magenta]📋 任务规划[/bold magenta]",
-                                border_style="magenta",
-                                box=box.ROUNDED,
-                            ))
-                            status.update("[bold green]✓ 规划完成，开始执行[/]")
-
-                    elif event["type"] == "tool_start":
-                        tool_name = event["tool"]
-                        tool_desc = get_tool_display_name(tool_name)
-                        current_tool = tool_name
-                        step_num = event.get("step", current_step)
-                        step_goal = event.get("step_goal", current_step_goal)
-                        if step_num is not None and step_goal is not None:
-                            n = f"/{total_steps}" if total_steps is not None else ""
-                            status.update(f"[bold cyan]📌 第 {step_num}{n} 步: {step_goal[:25]}{'…' if len(step_goal) > 25 else ''} · {tool_desc}[/]")
-                        else:
-                            status.update(create_progress_text(event.get("iteration", 1), tool_desc))
-
-                        # 简化输出
-                        console.print(f"\n[bold cyan]▶[/bold cyan] [bold]{tool_desc}[/bold]")
-
-                    elif event["type"] == "tool_end":
-                        # 美化显示工具结果
-                        result = event["result"]
-                        tool_name = current_tool or "unknown"
-
-                        # 使用格式化工具
-                        formatted_result = format_tool_result(tool_name, result)
-                        console.print(formatted_result)
-
-                    elif event["type"] == "tool_warning":
-                        console.print(Panel(
-                            f"⚠️  {event['message']}",
-                            border_style="yellow",
-                            title="[yellow]提示[/yellow]"
-                        ))
-
-                    elif event["type"] == "answer":
-                        console.print()
-                        # 使用美化的最终答案格式
-                        final_panel = format_final_answer(event["content"])
-                        console.print(final_panel)
-                        answered = True
-
-            # 在状态结束后显示本轮耗时
+            process_agent_events(agent, question, messages=chat_history, verbose=True, show_plan=True)
             elapsed = time.time() - start_time
-            if answered:
-                console.print(f"[dim]⏱ 本轮用时 {elapsed:.1f} 秒[/]")
+            console.print(f"[dim]⏱ 本轮用时 {elapsed:.1f} 秒[/]")
 
         except KeyboardInterrupt:
             console.print("\n[dim]已取消当前操作[/]")
