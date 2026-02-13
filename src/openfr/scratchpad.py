@@ -37,6 +37,8 @@ class Scratchpad:
     query: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     max_calls_per_tool: int = 3
+    _tool_call_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _called_args: set[tuple[str, str]] = field(default_factory=set, init=False, repr=False)
 
     def add_call(
         self, tool_name: str, args: dict[str, Any], result: str, error: str | None = None
@@ -45,10 +47,13 @@ class Scratchpad:
         self.tool_calls.append(
             ToolCall(tool_name=tool_name, args=args, result=result, error=error)
         )
+        self._tool_call_counts[tool_name] = self._tool_call_counts.get(tool_name, 0) + 1
+        args_key = json.dumps(args, sort_keys=True, ensure_ascii=False)
+        self._called_args.add((tool_name, args_key))
 
     def get_tool_call_count(self, tool_name: str) -> int:
         """Get number of times a tool has been called"""
-        return sum(1 for tc in self.tool_calls if tc.tool_name == tool_name)
+        return self._tool_call_counts.get(tool_name, 0)
 
     def can_call_tool(self, tool_name: str, args: dict[str, Any] | None = None) -> tuple[bool, str]:
         """
@@ -57,15 +62,14 @@ class Scratchpad:
         Returns:
             (allowed, warning_message)
         """
-        count = self.get_tool_call_count(tool_name)
+        count = self._tool_call_counts.get(tool_name, 0)
         if count >= self.max_calls_per_tool:
             return False, f"已达到工具 {tool_name} 的调用上限 ({self.max_calls_per_tool} 次)"
 
-        # Check for similar previous calls (exact same tool+args)
         if args:
-            for tc in self.tool_calls:
-                if tc.tool_name == tool_name and tc.args == args:
-                    return False, f"工具 {tool_name} 已使用相同参数调用过"
+            args_key = json.dumps(args, sort_keys=True, ensure_ascii=False)
+            if (tool_name, args_key) in self._called_args:
+                return False, f"工具 {tool_name} 已使用相同参数调用过"
 
         return True, ""
 
@@ -130,12 +134,8 @@ class Scratchpad:
 
         summary_parts = [f"原始查询: {self.query}", f"工具调用次数: {len(self.tool_calls)}", ""]
 
-        tool_counts: dict[str, int] = {}
-        for tc in self.tool_calls:
-            tool_counts[tc.tool_name] = tool_counts.get(tc.tool_name, 0) + 1
-
         summary_parts.append("工具使用统计:")
-        for tool, count in tool_counts.items():
+        for tool, count in self._tool_call_counts.items():
             summary_parts.append(f"  - {tool}: {count} 次")
 
         return "\n".join(summary_parts)
