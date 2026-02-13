@@ -131,7 +131,7 @@ class TestBaseUtils:
 class TestStockTools:
     """Tests for stock data tools."""
 
-    @patch("openfr.tools.stock.ak")
+    @patch("openfr.tools.stock_spot.ak")
     def test_get_stock_realtime(self, mock_ak):
         """Test getting stock realtime data."""
         mock_df = pd.DataFrame({
@@ -146,18 +146,24 @@ class TestStockTools:
         assert "000001" in result
         assert "平安银行" in result or "实时行情" in result
 
-    @patch("openfr.tools.stock.ak")
-    def test_get_stock_realtime_not_found(self, mock_ak):
+    @patch("openfr.tools.stock._fetch_stock_spot_sina")
+    @patch("openfr.tools.stock._fetch_stock_spot")
+    @patch("openfr.tools.stock._fetch_stock_info")
+    @patch("openfr.tools.stock._fetch_stock_history")
+    def test_get_stock_realtime_not_found(self, mock_hist, mock_info, mock_spot, mock_sina):
         """Test stock not found."""
-        mock_ak.stock_zh_a_spot_em.return_value = pd.DataFrame({
+        mock_info.return_value = pd.DataFrame()  # 个股详情空
+        mock_spot.return_value = pd.DataFrame({
             "代码": ["000002"],
             "名称": ["万科A"],
         })
+        mock_sina.return_value = pd.DataFrame({"代码": ["000002"], "名称": ["万科A"]})
+        mock_hist.return_value = pd.DataFrame()  # 历史数据空，避免兜底返回日线
 
         result = get_stock_realtime.invoke({"symbol": "000001"})
         assert "未找到" in result
 
-    @patch("openfr.tools.stock.ak")
+    @patch("openfr.tools.stock_spot.ak")
     def test_get_hot_stocks(self, mock_ak):
         """Test getting hot stocks."""
         mock_df = pd.DataFrame({
@@ -171,7 +177,7 @@ class TestStockTools:
         result = get_hot_stocks.invoke({})
         assert "热门股票" in result
 
-    @patch("openfr.tools.stock.ak")
+    @patch("openfr.tools.stock_spot.ak")
     def test_search_stock(self, mock_ak):
         """Test stock search."""
         mock_df = pd.DataFrame({

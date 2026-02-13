@@ -48,7 +48,7 @@ class TestToolIntegration:
         """Test that stock tools return properly formatted strings."""
         from openfr.tools.stock import get_hot_stocks
 
-        with patch("openfr.tools.stock.ak") as mock_ak:
+        with patch("openfr.tools.stock_spot.ak") as mock_ak:
             mock_ak.stock_hot_rank_em.return_value = pd.DataFrame({
                 "代码": ["000001"],
                 "股票名称": ["平安银行"],
